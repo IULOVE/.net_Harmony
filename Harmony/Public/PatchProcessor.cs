@@ -8,7 +8,7 @@ using System.Reflection.Emit;
 namespace HarmonyLib
 {
 	/// <summary>A PatchProcessor handles patches on a method/constructor</summary>
-	/// 
+	///
 	public class PatchProcessor
 	{
 		readonly Harmony instance;
@@ -18,13 +18,14 @@ namespace HarmonyLib
 		HarmonyMethod postfix;
 		HarmonyMethod transpiler;
 		HarmonyMethod finalizer;
+		HarmonyMethod innerprefix;
+		HarmonyMethod innerpostfix;
 
 		internal static readonly object locker = new();
 
-		/// <summary>Creates an empty patch processor</summary>
+		/// <summary>Creates a new PatchProcessor</summary>
 		/// <param name="instance">The Harmony instance</param>
 		/// <param name="original">The original method/constructor</param>
-		///
 		public PatchProcessor(Harmony instance, MethodBase original)
 		{
 			this.instance = instance;
@@ -111,6 +112,46 @@ namespace HarmonyLib
 			return this;
 		}
 
+		/// <summary>Adds an inner prefix</summary>
+		/// <param name="innerPrefix">The inner prefix as a <see cref="HarmonyMethod"/></param>
+		/// <returns>A <see cref="PatchProcessor"/> for chaining calls</returns>
+		///
+		public PatchProcessor AddInnerPrefix(HarmonyMethod innerPrefix)
+		{
+			innerprefix = innerPrefix;
+			return this;
+		}
+
+		/// <summary>Adds an inner prefix</summary>
+		/// <param name="fixMethod">The inner prefix method</param>
+		/// <returns>A <see cref="PatchProcessor"/> for chaining calls</returns>
+		///
+		public PatchProcessor AddInnerPrefix(MethodInfo fixMethod)
+		{
+			innerprefix = new HarmonyMethod(fixMethod);
+			return this;
+		}
+
+		/// <summary>Adds an inner postfix</summary>
+		/// <param name="innerPostfix">The inner postfix as a <see cref="HarmonyMethod"/></param>
+		/// <returns>A <see cref="PatchProcessor"/> for chaining calls</returns>
+		///
+		public PatchProcessor AddInnerPostfix(HarmonyMethod innerPostfix)
+		{
+			innerpostfix = innerPostfix;
+			return this;
+		}
+
+		/// <summary>Adds an inner postfix</summary>
+		/// <param name="fixMethod">The inner postfix method</param>
+		/// <returns>A <see cref="PatchProcessor"/> for chaining calls</returns>
+		///
+		public PatchProcessor AddInnerPostfix(MethodInfo fixMethod)
+		{
+			innerpostfix = new HarmonyMethod(fixMethod);
+			return this;
+		}
+
 		/// <summary>Gets all patched original methods in the appdomain</summary>
 		/// <returns>An enumeration of patched method/constructor</returns>
 		///
@@ -144,9 +185,10 @@ namespace HarmonyLib
 				patchInfo.AddPostfixes(instance.Id, postfix);
 				patchInfo.AddTranspilers(instance.Id, transpiler);
 				patchInfo.AddFinalizers(instance.Id, finalizer);
+				patchInfo.AddInnerPrefixes(instance.Id, innerprefix);
+				patchInfo.AddInnerPostfixes(instance.Id, innerpostfix);
 
 				var replacement = PatchFunctions.UpdateWrapper(original, patchInfo);
-
 				HarmonySharedState.UpdatePatchInfo(original, replacement, patchInfo);
 				return replacement;
 			}
@@ -159,6 +201,9 @@ namespace HarmonyLib
 		///
 		public PatchProcessor Unpatch(HarmonyPatchType type, string harmonyID)
 		{
+			if (original is null)
+				throw new NullReferenceException($"Null method for {instance.Id}");
+
 			lock (locker)
 			{
 				var patchInfo = HarmonySharedState.GetPatchInfo(original);
@@ -172,8 +217,12 @@ namespace HarmonyLib
 					patchInfo.RemoveTranspiler(harmonyID);
 				if (type == HarmonyPatchType.All || type == HarmonyPatchType.Finalizer)
 					patchInfo.RemoveFinalizer(harmonyID);
-				var replacement = PatchFunctions.UpdateWrapper(original, patchInfo);
+				if (type == HarmonyPatchType.All || type == HarmonyPatchType.InnerPrefix)
+					patchInfo.RemoveInnerPrefix(harmonyID);
+				if (type == HarmonyPatchType.All || type == HarmonyPatchType.InnerPostfix)
+					patchInfo.RemoveInnerPostfix(harmonyID);
 
+				var replacement = PatchFunctions.UpdateWrapper(original, patchInfo);
 				HarmonySharedState.UpdatePatchInfo(original, replacement, patchInfo);
 				return this;
 			}
@@ -185,14 +234,17 @@ namespace HarmonyLib
 		///
 		public PatchProcessor Unpatch(MethodInfo patch)
 		{
+			if (original is null)
+				throw new NullReferenceException($"Null method for {instance.Id}");
+
 			lock (locker)
 			{
 				var patchInfo = HarmonySharedState.GetPatchInfo(original);
 				patchInfo ??= new PatchInfo();
 
 				patchInfo.RemovePatch(patch);
-				var replacement = PatchFunctions.UpdateWrapper(original, patchInfo);
 
+				var replacement = PatchFunctions.UpdateWrapper(original, patchInfo);
 				HarmonySharedState.UpdatePatchInfo(original, replacement, patchInfo);
 				return this;
 			}
@@ -207,7 +259,7 @@ namespace HarmonyLib
 			PatchInfo patchInfo;
 			lock (locker) { patchInfo = HarmonySharedState.GetPatchInfo(method); }
 			if (patchInfo is null) return null;
-			return new Patches(patchInfo.prefixes, patchInfo.postfixes, patchInfo.transpilers, patchInfo.finalizers);
+			return new Patches(patchInfo.prefixes, patchInfo.postfixes, patchInfo.transpilers, patchInfo.finalizers, patchInfo.innerprefixes, patchInfo.innerpostfixes);
 		}
 
 		/// <summary>Sort patch methods by their priority rules</summary>
@@ -215,10 +267,7 @@ namespace HarmonyLib
 		/// <param name="patches">Patches to sort</param>
 		/// <returns>The sorted patch methods</returns>
 		///
-		public static List<MethodInfo> GetSortedPatchMethods(MethodBase original, Patch[] patches)
-		{
-			return PatchFunctions.GetSortedPatchMethods(original, patches, false);
-		}
+		public static List<MethodInfo> GetSortedPatchMethods(MethodBase original, Patch[] patches) => PatchFunctions.GetSortedPatchMethods(original, patches, false);
 
 		/// <summary>Gets Harmony version for all active Harmony instances</summary>
 		/// <param name="currentVersion">[out] The current Harmony version</param>
@@ -231,11 +280,14 @@ namespace HarmonyLib
 			GetAllPatchedMethods().Do(method =>
 			{
 				PatchInfo info;
-				lock (locker) { info = HarmonySharedState.GetPatchInfo(method); }
+				lock (locker)
+				{ info = HarmonySharedState.GetPatchInfo(method); }
 				info.prefixes.Do(fix => assemblies[fix.owner] = fix.PatchMethod.DeclaringType.Assembly);
 				info.postfixes.Do(fix => assemblies[fix.owner] = fix.PatchMethod.DeclaringType.Assembly);
 				info.transpilers.Do(fix => assemblies[fix.owner] = fix.PatchMethod.DeclaringType.Assembly);
 				info.finalizers.Do(fix => assemblies[fix.owner] = fix.PatchMethod.DeclaringType.Assembly);
+				info.innerprefixes.Do(fix => assemblies[fix.owner] = fix.PatchMethod.DeclaringType.Assembly);
+				info.innerpostfixes.Do(fix => assemblies[fix.owner] = fix.PatchMethod.DeclaringType.Assembly);
 			});
 
 			var result = new Dictionary<string, Version>();
@@ -253,7 +305,7 @@ namespace HarmonyLib
 		/// 
 		public static ILGenerator CreateILGenerator()
 		{
-			var method = new DynamicMethodDefinition($"ILGenerator_{Guid.NewGuid()}", typeof(void), new Type[0]);
+			var method = new DynamicMethodDefinition($"ILGenerator_{Guid.NewGuid()}", typeof(void), []);
 			return method.GetILGenerator();
 		}
 
@@ -265,8 +317,9 @@ namespace HarmonyLib
 		{
 			var returnType = original is MethodInfo m ? m.ReturnType : typeof(void);
 			var parameterTypes = original.GetParameters().Select(pi => pi.ParameterType).ToList();
-			if (original.IsStatic is false) parameterTypes.Insert(0, original.DeclaringType);
-			var method = new DynamicMethodDefinition($"ILGenerator_{original.Name}", returnType, parameterTypes.ToArray());
+			if (original.IsStatic is false)
+				parameterTypes.Insert(0, original.DeclaringType);
+			var method = new DynamicMethodDefinition($"ILGenerator_{original.Name}", returnType, [.. parameterTypes]);
 			return method.GetILGenerator();
 		}
 
@@ -275,10 +328,7 @@ namespace HarmonyLib
 		/// <param name="generator">Optionally an existing generator that will be used to create all local variables and labels contained in the result (if not specified, an internal generator is used)</param>
 		/// <returns>A list containing all the original <see cref="CodeInstruction"/></returns>
 		/// 
-		public static List<CodeInstruction> GetOriginalInstructions(MethodBase original, ILGenerator generator = null)
-		{
-			return MethodCopier.GetInstructions(generator ?? CreateILGenerator(original), original, 0);
-		}
+		public static List<CodeInstruction> GetOriginalInstructions(MethodBase original, ILGenerator generator = null) => MethodCopier.GetInstructions(generator ?? CreateILGenerator(original), original, 0);
 
 		/// <summary>Returns the methods unmodified list of code instructions</summary>
 		/// <param name="original">The original method/constructor</param>
@@ -297,10 +347,7 @@ namespace HarmonyLib
 		/// <param name="generator">Optionally an existing generator that will be used to create all local variables and labels contained in the result (if not specified, an internal generator is used)</param>
 		/// <returns>A list of <see cref="CodeInstruction"/></returns>
 		/// 
-		public static List<CodeInstruction> GetCurrentInstructions(MethodBase original, int maxTranspilers = int.MaxValue, ILGenerator generator = null)
-		{
-			return MethodCopier.GetInstructions(generator ?? CreateILGenerator(original), original, maxTranspilers);
-		}
+		public static List<CodeInstruction> GetCurrentInstructions(MethodBase original, int maxTranspilers = int.MaxValue, ILGenerator generator = null) => MethodCopier.GetInstructions(generator ?? CreateILGenerator(original), original, maxTranspilers);
 
 		/// <summary>Returns the methods current list of code instructions after all existing transpilers have been applied</summary>
 		/// <param name="original">The original method/constructor</param>

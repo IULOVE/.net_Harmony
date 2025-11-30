@@ -1,4 +1,4 @@
-﻿using HarmonyLib;
+using HarmonyLib;
 using HarmonyLibTests.Assets;
 using NUnit.Framework;
 
@@ -15,7 +15,7 @@ namespace HarmonyLibTests.ReversePatching
 			var getExtraMethodInfo = AccessTools.Method(typeof(Class1Reverse), "GetExtra");
 			Assert.NotNull(getExtraMethodInfo);
 
-			var result1 = getExtraMethodInfo.Invoke(null, new object[] { 123 });
+			var result1 = getExtraMethodInfo.Invoke(null, [123]);
 			Assert.AreEqual("Extra123", result1);
 
 			var instance = new Harmony("test");

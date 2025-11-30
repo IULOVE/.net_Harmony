@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Reflection.Emit;
@@ -31,7 +32,8 @@ namespace HarmonyLib
 		///
 		public static string Description(this Type[] parameters)
 		{
-			if (parameters is null) return "NULL";
+			if (parameters is null)
+				return "NULL";
 			return $"({parameters.Join(p => p.FullDescription())})";
 		}
 
@@ -45,7 +47,8 @@ namespace HarmonyLib
 				return "null";
 
 			var ns = type.Namespace;
-			if (string.IsNullOrEmpty(ns) is false) ns += ".";
+			if (string.IsNullOrEmpty(ns) is false)
+				ns += ".";
 			var result = ns + type.Name;
 
 			if (type.IsGenericType)
@@ -54,7 +57,13 @@ namespace HarmonyLib
 				var subTypes = type.GetGenericArguments();
 				for (var i = 0; i < subTypes.Length; i++)
 				{
-					if (result.EndsWith("<", StringComparison.Ordinal) is false)
+					if (result
+#if NET8_0_OR_GREATER
+					.EndsWith('<')
+#else
+					.EndsWith("<", StringComparison.Ordinal)
+#endif
+					is false)
 						result += ", ";
 					result += subTypes[i].FullDescription();
 				}
@@ -69,13 +78,17 @@ namespace HarmonyLib
 		///
 		public static string FullDescription(this MethodBase member)
 		{
-			if (member is null) return "null";
+			if (member is null)
+				return "null";
 			var returnType = AccessTools.GetReturnedType(member);
 
 			var result = new StringBuilder();
-			if (member.IsStatic) _ = result.Append("static ");
-			if (member.IsAbstract) _ = result.Append("abstract ");
-			if (member.IsVirtual) _ = result.Append("virtual ");
+			if (member.IsStatic)
+				_ = result.Append("static ");
+			if (member.IsAbstract)
+				_ = result.Append("abstract ");
+			if (member.IsVirtual)
+				_ = result.Append("virtual ");
 			_ = result.Append($"{returnType.FullDescription()} ");
 			if (member.DeclaringType is not null)
 				_ = result.Append($"{member.DeclaringType.FullDescription()}::");
@@ -88,9 +101,16 @@ namespace HarmonyLib
 		/// <param name="pinfo">The array of parameter infos</param>
 		/// <returns>An array of types</returns>
 		///
-		public static Type[] Types(this ParameterInfo[] pinfo)
+		public static Type[] Types(this ParameterInfo[] pinfo) => [.. pinfo.Select(pi => pi.ParameterType)];
+
+		/// <summary>Tests if a type has the <see cref="HarmonyAttribute"/></summary>
+		/// <param name="type">The class/type to test</param>
+		/// <returns>True if the type has the <see cref="HarmonyAttribute"/></returns>
+		public static bool HasHarmonyAttribute(this Type type)
 		{
-			return pinfo.Select(pi => pi.ParameterType).ToArray();
+			if (type is null)
+				throw new ArgumentNullException(nameof(type));
+			return HarmonyMethodExtensions.GetFromType(type).Count > 0;
 		}
 
 		/// <summary>A helper to access a value via key from a dictionary</summary>
@@ -134,17 +154,39 @@ namespace HarmonyLib
 			{
 				switch (c)
 				{
-					case '\'': _ = literal.Append(@"\'"); break;
-					case '\"': _ = literal.Append("\\\""); break;
-					case '\\': _ = literal.Append(@"\\"); break;
-					case '\0': _ = literal.Append(@"\0"); break;
-					case '\a': _ = literal.Append(@"\a"); break;
-					case '\b': _ = literal.Append(@"\b"); break;
-					case '\f': _ = literal.Append(@"\f"); break;
-					case '\n': _ = literal.Append(@"\n"); break;
-					case '\r': _ = literal.Append(@"\r"); break;
-					case '\t': _ = literal.Append(@"\t"); break;
-					case '\v': _ = literal.Append(@"\v"); break;
+					case '\'':
+						_ = literal.Append(@"\'");
+						break;
+					case '\"':
+						_ = literal.Append("\\\"");
+						break;
+					case '\\':
+						_ = literal.Append(@"\\");
+						break;
+					case '\0':
+						_ = literal.Append(@"\0");
+						break;
+					case '\a':
+						_ = literal.Append(@"\a");
+						break;
+					case '\b':
+						_ = literal.Append(@"\b");
+						break;
+					case '\f':
+						_ = literal.Append(@"\f");
+						break;
+					case '\n':
+						_ = literal.Append(@"\n");
+						break;
+					case '\r':
+						_ = literal.Append(@"\r");
+						break;
+					case '\t':
+						_ = literal.Append(@"\t");
+						break;
+					case '\v':
+						_ = literal.Append(@"\v");
+						break;
 					default:
 						if (c >= 0x20 && c <= 0x7e)
 							_ = literal.Append(c);
@@ -265,16 +307,54 @@ namespace HarmonyLib
 			OpCodes.Ldc_I4_S,
 			OpCodes.Ldc_I8,
 			OpCodes.Ldc_R4,
-			OpCodes.Ldc_R8
+			OpCodes.Ldc_R8,
+			OpCodes.Ldstr
 		];
+
+		internal static int GetSize(this CodeInstruction instruction)
+		{
+			var size = instruction.opcode.Size;
+			switch (instruction.opcode.OperandType)
+			{
+				case OperandType.InlineSwitch:
+					size += (1 + ((Array)instruction.operand).Length) * 4;
+					break;
+
+				case OperandType.InlineI8:
+				case OperandType.InlineR:
+					size += 8;
+					break;
+
+				case OperandType.InlineBrTarget:
+				case OperandType.InlineField:
+				case OperandType.InlineI:
+				case OperandType.InlineMethod:
+				case OperandType.InlineSig:
+				case OperandType.InlineString:
+				case OperandType.InlineTok:
+				case OperandType.InlineType:
+				case OperandType.ShortInlineR:
+					size += 4;
+					break;
+
+				case OperandType.InlineVar:
+					size += 2;
+					break;
+
+				case OperandType.ShortInlineBrTarget:
+				case OperandType.ShortInlineI:
+				case OperandType.ShortInlineVar:
+					size += 1;
+					break;
+			}
+
+			return size;
+		}
 
 		/// <summary>Returns if an <see cref="OpCode"/> is initialized and valid</summary>
 		/// <param name="code">The <see cref="OpCode"/></param>
 		/// <returns></returns>
-		public static bool IsValid(this OpCode code)
-		{
-			return code.Size > 0;
-		}
+		public static bool IsValid(this OpCode code) => code.Size > 0;
 
 		/// <summary>Shortcut for testing whether the operand is equal to a non-null value</summary>
 		/// <param name="code">The <see cref="CodeInstruction"/></param>
@@ -283,8 +363,10 @@ namespace HarmonyLib
 		///
 		public static bool OperandIs(this CodeInstruction code, object value)
 		{
-			if (value is null) throw new ArgumentNullException(nameof(value));
-			if (code.operand is null) return false;
+			if (value is null)
+				throw new ArgumentNullException(nameof(value));
+			if (code.operand is null)
+				return false;
 			var type = value.GetType();
 			var operandType = code.operand.GetType();
 			if (AccessTools.IsInteger(type) && AccessTools.IsNumber(operandType))
@@ -303,7 +385,8 @@ namespace HarmonyLib
 		[EditorBrowsable(EditorBrowsableState.Never)]
 		public static bool OperandIs(this CodeInstruction code, MemberInfo value)
 		{
-			if (value is null) throw new ArgumentNullException(nameof(value));
+			if (value is null)
+				throw new ArgumentNullException(nameof(value));
 			return Equals(code.operand, value);
 		}
 
@@ -313,10 +396,7 @@ namespace HarmonyLib
 		/// <param name="operand">The operand value</param>
 		/// <returns>True if the opcode is equal to the given opcode and the operand has the same type and is equal to the given operand</returns>
 		///
-		public static bool Is(this CodeInstruction code, OpCode opcode, object operand)
-		{
-			return code.opcode == opcode && code.OperandIs(operand);
-		}
+		public static bool Is(this CodeInstruction code, OpCode opcode, object operand) => code.opcode == opcode && code.OperandIs(operand);
 
 		/// <summary>Shortcut for <code>code.opcode == opcode &amp;&amp; code.OperandIs(operand)</code></summary>
 		/// <param name="code">The <see cref="CodeInstruction"/></param>
@@ -326,10 +406,7 @@ namespace HarmonyLib
 		/// <remarks>This is an optimized version of <see cref="Is(CodeInstruction, OpCode, object)"/> for <see cref="MemberInfo"/></remarks>
 		///
 		[EditorBrowsable(EditorBrowsableState.Never)]
-		public static bool Is(this CodeInstruction code, OpCode opcode, MemberInfo operand)
-		{
-			return code.opcode == opcode && code.OperandIs(operand);
-		}
+		public static bool Is(this CodeInstruction code, OpCode opcode, MemberInfo operand) => code.opcode == opcode && code.OperandIs(operand);
 
 		/// <summary>Tests for any form of Ldarg*</summary>
 		/// <param name="code">The <see cref="CodeInstruction"/></param>
@@ -338,12 +415,18 @@ namespace HarmonyLib
 		///
 		public static bool IsLdarg(this CodeInstruction code, int? n = null)
 		{
-			if ((n.HasValue is false || n.Value == 0) && code.opcode == OpCodes.Ldarg_0) return true;
-			if ((n.HasValue is false || n.Value == 1) && code.opcode == OpCodes.Ldarg_1) return true;
-			if ((n.HasValue is false || n.Value == 2) && code.opcode == OpCodes.Ldarg_2) return true;
-			if ((n.HasValue is false || n.Value == 3) && code.opcode == OpCodes.Ldarg_3) return true;
-			if (code.opcode == OpCodes.Ldarg && (n.HasValue is false || n.Value == Convert.ToInt32(code.operand))) return true;
-			if (code.opcode == OpCodes.Ldarg_S && (n.HasValue is false || n.Value == Convert.ToInt32(code.operand))) return true;
+			if ((n.HasValue is false || n.Value == 0) && code.opcode == OpCodes.Ldarg_0)
+				return true;
+			if ((n.HasValue is false || n.Value == 1) && code.opcode == OpCodes.Ldarg_1)
+				return true;
+			if ((n.HasValue is false || n.Value == 2) && code.opcode == OpCodes.Ldarg_2)
+				return true;
+			if ((n.HasValue is false || n.Value == 3) && code.opcode == OpCodes.Ldarg_3)
+				return true;
+			if (code.opcode == OpCodes.Ldarg && (n.HasValue is false || n.Value == Convert.ToInt32(code.operand)))
+				return true;
+			if (code.opcode == OpCodes.Ldarg_S && (n.HasValue is false || n.Value == Convert.ToInt32(code.operand)))
+				return true;
 			return false;
 		}
 
@@ -354,7 +437,8 @@ namespace HarmonyLib
 		///
 		public static bool IsLdarga(this CodeInstruction code, int? n = null)
 		{
-			if (code.opcode != OpCodes.Ldarga && code.opcode != OpCodes.Ldarga_S) return false;
+			if (code.opcode != OpCodes.Ldarga && code.opcode != OpCodes.Ldarga_S)
+				return false;
 			return n.HasValue is false || n.Value == Convert.ToInt32(code.operand);
 		}
 
@@ -365,7 +449,8 @@ namespace HarmonyLib
 		///
 		public static bool IsStarg(this CodeInstruction code, int? n = null)
 		{
-			if (code.opcode != OpCodes.Starg && code.opcode != OpCodes.Starg_S) return false;
+			if (code.opcode != OpCodes.Starg && code.opcode != OpCodes.Starg_S)
+				return false;
 			return n.HasValue is false || n.Value == Convert.ToInt32(code.operand);
 		}
 
@@ -389,7 +474,8 @@ namespace HarmonyLib
 		///
 		public static bool IsStloc(this CodeInstruction code, LocalBuilder variable = null)
 		{
-			if (opcodesStoringLocal.Contains(code.opcode) is false) return false;
+			if (opcodesStoringLocal.Contains(code.opcode) is false)
+				return false;
 			return variable is null || Equals(variable, code.operand);
 		}
 
@@ -416,8 +502,10 @@ namespace HarmonyLib
 		///
 		public static bool Calls(this CodeInstruction code, MethodInfo method)
 		{
-			if (method is null) throw new ArgumentNullException(nameof(method));
-			if (code.opcode != OpCodes.Call && code.opcode != OpCodes.Callvirt) return false;
+			if (method is null)
+				throw new ArgumentNullException(nameof(method));
+			if (code.opcode != OpCodes.Call && code.opcode != OpCodes.Callvirt)
+				return false;
 			return Equals(code.operand, method);
 		}
 
@@ -425,10 +513,7 @@ namespace HarmonyLib
 		/// <param name="code">The <see cref="CodeInstruction"/></param>
 		/// <returns>True if the instruction loads a constant</returns>
 		///
-		public static bool LoadsConstant(this CodeInstruction code)
-		{
-			return constantLoadingCodes.Contains(code.opcode);
-		}
+		public static bool LoadsConstant(this CodeInstruction code) => constantLoadingCodes.Contains(code.opcode);
 
 		/// <summary>Tests if the code instruction loads an integer constant</summary>
 		/// <param name="code">The <see cref="CodeInstruction"/></param>
@@ -438,17 +523,28 @@ namespace HarmonyLib
 		public static bool LoadsConstant(this CodeInstruction code, long number)
 		{
 			var op = code.opcode;
-			if (number == -1 && op == OpCodes.Ldc_I4_M1) return true;
-			if (number == 0 && op == OpCodes.Ldc_I4_0) return true;
-			if (number == 1 && op == OpCodes.Ldc_I4_1) return true;
-			if (number == 2 && op == OpCodes.Ldc_I4_2) return true;
-			if (number == 3 && op == OpCodes.Ldc_I4_3) return true;
-			if (number == 4 && op == OpCodes.Ldc_I4_4) return true;
-			if (number == 5 && op == OpCodes.Ldc_I4_5) return true;
-			if (number == 6 && op == OpCodes.Ldc_I4_6) return true;
-			if (number == 7 && op == OpCodes.Ldc_I4_7) return true;
-			if (number == 8 && op == OpCodes.Ldc_I4_8) return true;
-			if (op != OpCodes.Ldc_I4 && op != OpCodes.Ldc_I4_S && op != OpCodes.Ldc_I8) return false;
+			if (number == -1 && op == OpCodes.Ldc_I4_M1)
+				return true;
+			if (number == 0 && op == OpCodes.Ldc_I4_0)
+				return true;
+			if (number == 1 && op == OpCodes.Ldc_I4_1)
+				return true;
+			if (number == 2 && op == OpCodes.Ldc_I4_2)
+				return true;
+			if (number == 3 && op == OpCodes.Ldc_I4_3)
+				return true;
+			if (number == 4 && op == OpCodes.Ldc_I4_4)
+				return true;
+			if (number == 5 && op == OpCodes.Ldc_I4_5)
+				return true;
+			if (number == 6 && op == OpCodes.Ldc_I4_6)
+				return true;
+			if (number == 7 && op == OpCodes.Ldc_I4_7)
+				return true;
+			if (number == 8 && op == OpCodes.Ldc_I4_8)
+				return true;
+			if (op != OpCodes.Ldc_I4 && op != OpCodes.Ldc_I4_S && op != OpCodes.Ldc_I8)
+				return false;
 			return Convert.ToInt64(code.operand) == number;
 		}
 
@@ -459,7 +555,8 @@ namespace HarmonyLib
 		///
 		public static bool LoadsConstant(this CodeInstruction code, double number)
 		{
-			if (code.opcode != OpCodes.Ldc_R4 && code.opcode != OpCodes.Ldc_R8) return false;
+			if (code.opcode != OpCodes.Ldc_R4 && code.opcode != OpCodes.Ldc_R8)
+				return false;
 			var val = Convert.ToDouble(code.operand);
 			return val == number;
 		}
@@ -469,10 +566,7 @@ namespace HarmonyLib
 		/// <param name="e">The enum</param>
 		/// <returns>True if the instruction loads the constant</returns>
 		///
-		public static bool LoadsConstant(this CodeInstruction code, Enum e)
-		{
-			return code.LoadsConstant(Convert.ToInt64(e));
-		}
+		public static bool LoadsConstant(this CodeInstruction code, Enum e) => code.LoadsConstant(Convert.ToInt64(e));
 
 		/// <summary>Tests if the code instruction loads a string constant</summary>
 		/// <param name="code">The <see cref="CodeInstruction"/></param>
@@ -481,7 +575,8 @@ namespace HarmonyLib
 		///
 		public static bool LoadsConstant(this CodeInstruction code, string str)
 		{
-			if (code.opcode != OpCodes.Ldstr) return false;
+			if (code.opcode != OpCodes.Ldstr)
+				return false;
 			var val = Convert.ToString(code.operand);
 			return val == str;
 		}
@@ -494,11 +589,14 @@ namespace HarmonyLib
 		///
 		public static bool LoadsField(this CodeInstruction code, FieldInfo field, bool byAddress = false)
 		{
-			if (field is null) throw new ArgumentNullException(nameof(field));
+			if (field is null)
+				throw new ArgumentNullException(nameof(field));
 			var ldfldCode = field.IsStatic ? OpCodes.Ldsfld : OpCodes.Ldfld;
-			if (byAddress is false && code.opcode == ldfldCode && Equals(code.operand, field)) return true;
+			if (byAddress is false && code.opcode == ldfldCode && Equals(code.operand, field))
+				return true;
 			var ldfldaCode = field.IsStatic ? OpCodes.Ldsflda : OpCodes.Ldflda;
-			if (byAddress is true && code.opcode == ldfldaCode && Equals(code.operand, field)) return true;
+			if (byAddress is true && code.opcode == ldfldaCode && Equals(code.operand, field))
+				return true;
 			return false;
 		}
 
@@ -509,7 +607,8 @@ namespace HarmonyLib
 		///
 		public static bool StoresField(this CodeInstruction code, FieldInfo field)
 		{
-			if (field is null) throw new ArgumentNullException(nameof(field));
+			if (field is null)
+				throw new ArgumentNullException(nameof(field));
 			var stfldCode = field.IsStatic ? OpCodes.Stsfld : OpCodes.Stfld;
 			return code.opcode == stfldCode && Equals(code.operand, field);
 		}
@@ -521,14 +620,34 @@ namespace HarmonyLib
 		/// <seealso cref="CodeInstruction.StoreLocal(int)"/>
 		public static int LocalIndex(this CodeInstruction code)
 		{
-			if (code.opcode == OpCodes.Ldloc_0 || code.opcode == OpCodes.Stloc_0) return 0;
-			else if (code.opcode == OpCodes.Ldloc_1 || code.opcode == OpCodes.Stloc_1) return 1;
-			else if (code.opcode == OpCodes.Ldloc_2 || code.opcode == OpCodes.Stloc_2) return 2;
-			else if (code.opcode == OpCodes.Ldloc_3 || code.opcode == OpCodes.Stloc_3) return 3;
-			else if (code.opcode == OpCodes.Ldloc_S || code.opcode == OpCodes.Ldloc) return Convert.ToInt32(code.operand);
-			else if (code.opcode == OpCodes.Stloc_S || code.opcode == OpCodes.Stloc) return Convert.ToInt32(code.operand);
-			else if (code.opcode == OpCodes.Ldloca_S || code.opcode == OpCodes.Ldloca) return Convert.ToInt32(code.operand);
-			else throw new ArgumentException("Instruction is not a load or store", nameof(code));
+			if (code.opcode == OpCodes.Ldloc_0 || code.opcode == OpCodes.Stloc_0)
+				return 0;
+			else if (code.opcode == OpCodes.Ldloc_1 || code.opcode == OpCodes.Stloc_1)
+				return 1;
+			else if (code.opcode == OpCodes.Ldloc_2 || code.opcode == OpCodes.Stloc_2)
+				return 2;
+			else if (code.opcode == OpCodes.Ldloc_3 || code.opcode == OpCodes.Stloc_3)
+				return 3;
+			else if (code.opcode == OpCodes.Ldloc_S || code.opcode == OpCodes.Ldloc)
+			{
+				if (code.operand is LocalBuilder localBuilder)
+					return localBuilder.LocalIndex;
+				return Convert.ToInt32(code.operand);
+			}
+			else if (code.opcode == OpCodes.Stloc_S || code.opcode == OpCodes.Stloc)
+			{
+				if (code.operand is LocalBuilder localBuilder)
+					return localBuilder.LocalIndex;
+				return Convert.ToInt32(code.operand);
+			}
+			else if (code.opcode == OpCodes.Ldloca_S || code.opcode == OpCodes.Ldloca)
+			{
+				if (code.operand is LocalBuilder localBuilder)
+					return localBuilder.LocalIndex;
+				return Convert.ToInt32(code.operand);
+			}
+			else
+				throw new ArgumentException("Instruction is not a load or store", nameof(code));
 		}
 
 		/// <summary>Returns the index targeted by this <c>ldarg</c>, <c>ldarga</c>, or <c>starg</c></summary>
@@ -538,14 +657,22 @@ namespace HarmonyLib
 		/// <seealso cref="CodeInstruction.StoreArgument(int)"/>
 		public static int ArgumentIndex(this CodeInstruction code)
 		{
-			if (code.opcode == OpCodes.Ldarg_0) return 0;
-			else if (code.opcode == OpCodes.Ldarg_1) return 1;
-			else if (code.opcode == OpCodes.Ldarg_2) return 2;
-			else if (code.opcode == OpCodes.Ldarg_3) return 3;
-			else if (code.opcode == OpCodes.Ldarg_S || code.opcode == OpCodes.Ldarg) return Convert.ToInt32(code.operand);
-			else if (code.opcode == OpCodes.Starg_S || code.opcode == OpCodes.Starg) return Convert.ToInt32(code.operand);
-			else if (code.opcode == OpCodes.Ldarga_S || code.opcode == OpCodes.Ldarga) return Convert.ToInt32(code.operand);
-			else throw new ArgumentException("Instruction is not a load or store", nameof(code));
+			if (code.opcode == OpCodes.Ldarg_0)
+				return 0;
+			else if (code.opcode == OpCodes.Ldarg_1)
+				return 1;
+			else if (code.opcode == OpCodes.Ldarg_2)
+				return 2;
+			else if (code.opcode == OpCodes.Ldarg_3)
+				return 3;
+			else if (code.opcode == OpCodes.Ldarg_S || code.opcode == OpCodes.Ldarg)
+				return Convert.ToInt32(code.operand);
+			else if (code.opcode == OpCodes.Starg_S || code.opcode == OpCodes.Starg)
+				return Convert.ToInt32(code.operand);
+			else if (code.opcode == OpCodes.Ldarga_S || code.opcode == OpCodes.Ldarga)
+				return Convert.ToInt32(code.operand);
+			else
+				throw new ArgumentException("Instruction is not a load or store", nameof(code));
 		}
 
 		/// <summary>Adds labels to the code instruction and return it</summary>
@@ -592,10 +719,7 @@ namespace HarmonyLib
 		/// <param name="code">The <see cref="CodeInstruction"/> to move the labels to</param>
 		/// <param name="other">The other <see cref="CodeInstruction"/> to move the labels from</param>
 		/// <returns>The code instruction that received the labels</returns>
-		public static CodeInstruction MoveLabelsFrom(this CodeInstruction code, CodeInstruction other)
-		{
-			return code.WithLabels(other.ExtractLabels());
-		}
+		public static CodeInstruction MoveLabelsFrom(this CodeInstruction code, CodeInstruction other) => code.WithLabels(other.ExtractLabels());
 
 		/// <summary>Adds ExceptionBlocks to the code instruction and return it</summary>
 		/// <param name="code">The <see cref="CodeInstruction"/></param>
@@ -641,10 +765,7 @@ namespace HarmonyLib
 		/// <param name="code">The <see cref="CodeInstruction"/> to move the ExceptionBlocks to</param>
 		/// <param name="other">The other <see cref="CodeInstruction"/> to move the ExceptionBlocks from</param>
 		/// <returns>The code instruction that received the blocks</returns>
-		public static CodeInstruction MoveBlocksFrom(this CodeInstruction code, CodeInstruction other)
-		{
-			return code.WithBlocks(other.ExtractBlocks());
-		}
+		public static CodeInstruction MoveBlocksFrom(this CodeInstruction code, CodeInstruction other) => code.WithBlocks(other.ExtractBlocks());
 	}
 
 	/// <summary>Extensions for a sequence of <see cref="CodeInstruction"/></summary>
@@ -655,14 +776,11 @@ namespace HarmonyLib
 		/// <param name="instructions">The CodeInstructions (like a body of a method) to search in</param>
 		/// <param name="matches">An array of <see cref="CodeMatch"/> representing the sequence of codes you want to search for</param>
 		/// <returns></returns>
-		public static bool Matches(this IEnumerable<CodeInstruction> instructions, CodeMatch[] matches)
-		{
-			return new CodeMatcher(instructions).MatchStartForward(matches).IsValid;
-		}
+		public static bool Matches(this IEnumerable<CodeInstruction> instructions, CodeMatch[] matches) => new CodeMatcher(instructions).MatchStartForward(matches).IsValid;
 	}
 
 	/// <summary>General extensions for collections</summary>
-	/// 
+	///
 	public static class CollectionExtensions
 	{
 		/// <summary>A simple way to execute code for every element in a collection</summary>
@@ -672,9 +790,11 @@ namespace HarmonyLib
 		///
 		public static void Do<T>(this IEnumerable<T> sequence, Action<T> action)
 		{
-			if (sequence is null) return;
+			if (sequence is null)
+				return;
 			var enumerator = sequence.GetEnumerator();
-			while (enumerator.MoveNext()) action(enumerator.Current);
+			while (enumerator.MoveNext())
+				action(enumerator.Current);
 		}
 
 		/// <summary>A simple way to execute code for elements in a collection matching a condition</summary>
@@ -683,10 +803,7 @@ namespace HarmonyLib
 		/// <param name="condition">The predicate</param>
 		/// <param name="action">The action to execute</param>
 		///
-		public static void DoIf<T>(this IEnumerable<T> sequence, Func<T, bool> condition, Action<T> action)
-		{
-			sequence.Where(condition).Do(action);
-		}
+		public static void DoIf<T>(this IEnumerable<T> sequence, Func<T, bool> condition, Action<T> action) => sequence.Where(condition).Do(action);
 
 		/// <summary>A helper to add an item to a collection</summary>
 		/// <typeparam name="T">The inner type of the collection</typeparam>
@@ -694,10 +811,8 @@ namespace HarmonyLib
 		/// <param name="item">The item to add</param>
 		/// <returns>The collection containing the item</returns>
 		///
-		public static IEnumerable<T> AddItem<T>(this IEnumerable<T> sequence, T item)
-		{
-			return (sequence ?? Enumerable.Empty<T>()).Concat(new[] { item });
-		}
+		[SuppressMessage("Style", "IDE0300")]
+		public static IEnumerable<T> AddItem<T>(this IEnumerable<T> sequence, T item) => (sequence ?? []).Concat(new T[] { item });
 
 		/// <summary>A helper to add an item to an array</summary>
 		/// <typeparam name="T">The inner type of the collection</typeparam>
@@ -705,10 +820,7 @@ namespace HarmonyLib
 		/// <param name="item">The item to add</param>
 		/// <returns>The array containing the item</returns>
 		///
-		public static T[] AddToArray<T>(this T[] sequence, T item)
-		{
-			return AddItem(sequence, item).ToArray();
-		}
+		public static T[] AddToArray<T>(this T[] sequence, T item) => [.. AddItem(sequence, item)];
 
 		/// <summary>A helper to add items to an array</summary>
 		/// <typeparam name="T">The inner type of the collection</typeparam>
@@ -716,13 +828,9 @@ namespace HarmonyLib
 		/// <param name="items">The items to add</param>
 		/// <returns>The array containing the items</returns>
 		///
-		public static T[] AddRangeToArray<T>(this T[] sequence, T[] items)
-		{
-			return (sequence ?? Enumerable.Empty<T>()).Concat(items).ToArray();
-		}
+		public static T[] AddRangeToArray<T>(this T[] sequence, T[] items) => [.. (sequence ?? Enumerable.Empty<T>()), .. items];
 
-		// TODO: Should these be made public?
-		// These extension methods may collide with extension methods from other libraries users may be using,
+		// NOTE: These extension methods may collide with extension methods from other libraries users may be using,
 		// just due to their general nature and naming commonality.
 		// This is also a concern for the existing public extension methods in this file,
 		// but it's too late to make such extension method internal like these.
@@ -754,15 +862,12 @@ namespace HarmonyLib
 	}
 
 	/// <summary>General extensions for collections</summary>
-	/// 
+	///
 	public static class MethodBaseExtensions
 	{
 		/// <summary>Tests a class member if it has an IL method body (external methods for example don't have a body)</summary>
 		/// <param name="member">The member to test</param>
 		/// <returns>Returns true if the member has an IL body or false if not</returns>
-		public static bool HasMethodBody(this MethodBase member)
-		{
-			return (member.GetMethodBody()?.GetILAsByteArray()?.Length ?? 0) > 0;
-		}
+		public static bool HasMethodBody(this MethodBase member) => (member.GetMethodBody()?.GetILAsByteArray()?.Length ?? 0) > 0;
 	}
 }

@@ -32,7 +32,7 @@ namespace HarmonyLib
 	}
 
 	/// <summary>An exception block</summary>
-	/// 
+	///
 	public class ExceptionBlock
 	{
 		/// <summary>Block type</summary>
@@ -43,7 +43,7 @@ namespace HarmonyLib
 		/// 
 		public Type catchType;
 
-		/// <summary>Creates an exception block</summary>
+		/// <summary>Creates a new ExceptionBlock</summary>
 		/// <param name="blockType">The <see cref="ExceptionBlockType"/></param>
 		/// <param name="catchType">The catch type</param>
 		///

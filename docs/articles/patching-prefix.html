@@ -8,7 +8,7 @@
     <title>Patching </title>
     <meta name="viewport" content="width=device-width">
     <meta name="title" content="Patching ">
-    <meta name="generator" content="docfx 2.59.4.0">
+    <meta name="generator" content="docfx 2.48.1.0">
     
     <link rel="shortcut icon" href="../favicon.ico">
     <link rel="stylesheet" href="../styles/docfx.vendor.css">
@@ -102,10 +102,7 @@ class Patch
 <p><img src="https://raw.githubusercontent.com/pardeike/Harmony/master/Harmony/Documentation/images/note.png" alt="note"> It is not recommended to skip the original unless you want to completely change the way it works. If you only want a small change or a side effect, using a postfix or a transpiler is always preferred since it allows for multiple users changing the original without each implementation fighting over how the original should behave.</p>
 <pre><code class="lang-csharp" name="example">public class OriginalCode
 {
-    public string GetName()
-    {
-        return name; // ...
-    }
+    public string GetName() =&gt; name; // ...
 }
 
 [HarmonyPatch(typeof(OriginalCode), nameof(OriginalCode.GetName))]
@@ -118,13 +115,10 @@ class Patch
     }
 }
 </code></pre>
-<p>Here is another example showing the diference between what the original method returns and what the Prefix returns. it illustrate that the boolean return value of the Prefix only determines if the original gets executed or not.</p>
+<p>Here is another example showing the difference between what the original method returns and what the Prefix returns. it illustrate that the boolean return value of the Prefix only determines if the original gets executed or not.</p>
 <pre><code class="lang-csharp" name="example">public class OriginalCode
 {
-    public bool IsFullAfterTakingIn(int i)
-    {
-        return DoSomeExpensiveCalculation() &gt; i;
-    }
+    public bool IsFullAfterTakingIn(int i) =&gt; DoSomeExpensiveCalculation() &gt; i;
 }
 
 [HarmonyPatch(typeof(OriginalCode), nameof(OriginalCode.IsFullAfterTakingIn))]
@@ -177,13 +171,12 @@ class Patch
               <div class="contribution">
                 <ul class="nav">
                   <li>
-                    <a href="https://github.com/pardeike/Harmony/blob/master/Harmony/Documentation/articles/patching-prefix.md/#L1" class="contribution-link">Improve this Doc</a>
+                    <a href="https://github.com/pardeike/Harmony/blob/master/Documentation/articles/patching-prefix.md/#L1" class="contribution-link">Improve this Doc</a>
                   </li>
                 </ul>
               </div>
               <nav class="bs-docs-sidebar hidden-print hidden-xs hidden-sm affix" id="affix">
-                <h5>In This Article</h5>
-                <div></div>
+              <!-- <p><a class="back-to-top" href="#top">Back to top</a><p> -->
               </nav>
             </div>
           </div>

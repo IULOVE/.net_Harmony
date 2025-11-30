@@ -49,7 +49,7 @@ namespace HarmonyLib
 		/// </remarks>
 		public static FastInvokeHandler GetHandler(MethodInfo methodInfo, bool directBoxValueAccess = false)
 		{
-			var dynamicMethod = new DynamicMethodDefinition($"FastInvoke_{methodInfo.Name}_{(directBoxValueAccess ? "direct" : "indirect")}", typeof(object), new Type[] { typeof(object), typeof(object[]) });
+			var dynamicMethod = new DynamicMethodDefinition($"FastInvoke_{methodInfo.Name}_{(directBoxValueAccess ? "direct" : "indirect")}", typeof(object), [typeof(object), typeof(object[])]);
 			var il = dynamicMethod.GetILGenerator();
 
 			if (!methodInfo.IsStatic)
@@ -140,24 +140,15 @@ namespace HarmonyLib
 
 			Emit(il, OpCodes.Ret);
 
-			var invoder = (FastInvokeHandler)dynamicMethod.Generate().CreateDelegate(typeof(FastInvokeHandler));
+			var invoder = dynamicMethod.Generate().CreateDelegate<FastInvokeHandler>();
 			return invoder;
 		}
 
-		internal static void Emit(ILGenerator il, OpCode opcode)
-		{
-			il.Emit(opcode);
-		}
+		internal static void Emit(ILGenerator il, OpCode opcode) => il.Emit(opcode);
 
-		internal static void Emit(ILGenerator il, OpCode opcode, Type type)
-		{
-			il.Emit(opcode, type);
-		}
+		internal static void Emit(ILGenerator il, OpCode opcode, Type type) => il.Emit(opcode, type);
 
-		internal static void EmitCall(ILGenerator il, OpCode opcode, MethodInfo methodInfo)
-		{
-			il.EmitCall(opcode, methodInfo, null);
-		}
+		internal static void EmitCall(ILGenerator il, OpCode opcode, MethodInfo methodInfo) => il.EmitCall(opcode, methodInfo, null);
 
 		static void EmitUnboxIfNeeded(ILGenerator il, Type type)
 		{

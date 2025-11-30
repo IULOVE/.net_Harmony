@@ -8,7 +8,7 @@
     <title>Patching </title>
     <meta name="viewport" content="width=device-width">
     <meta name="title" content="Patching ">
-    <meta name="generator" content="docfx 2.59.4.0">
+    <meta name="generator" content="docfx 2.48.1.0">
     
     <link rel="shortcut icon" href="../favicon.ico">
     <link rel="stylesheet" href="../styles/docfx.vendor.css">
@@ -96,16 +96,10 @@ public class MyException : Exception
     public MyException() { }
     public MyException(string message) : base(message) { }
     public MyException(string message, Exception innerException) : base(message, innerException) { }
-    protected MyException(SerializationInfo serializationInfo, StreamingContext streamingContext)
-    {
-        throw new NotImplementedException();
-    }
+    protected MyException(SerializationInfo serializationInfo, StreamingContext streamingContext) =&gt; throw new NotImplementedException();
 }
 
-static Exception Finalizer(Exception __exception)
-{
-    return new MyException(&quot;Oops&quot;, __exception);
-}
+static Exception Finalizer(Exception __exception) =&gt; new MyException(&quot;Oops&quot;, __exception);
 </code></pre>
 <p>Beside their handling of exceptions they can receive the same arguments as Postfixes.</p>
 </article>
@@ -116,13 +110,12 @@ static Exception Finalizer(Exception __exception)
               <div class="contribution">
                 <ul class="nav">
                   <li>
-                    <a href="https://github.com/pardeike/Harmony/blob/master/Harmony/Documentation/articles/patching-finalizer.md/#L1" class="contribution-link">Improve this Doc</a>
+                    <a href="https://github.com/pardeike/Harmony/blob/master/Documentation/articles/patching-finalizer.md/#L1" class="contribution-link">Improve this Doc</a>
                   </li>
                 </ul>
               </div>
               <nav class="bs-docs-sidebar hidden-print hidden-xs hidden-sm affix" id="affix">
-                <h5>In This Article</h5>
-                <div></div>
+              <!-- <p><a class="back-to-top" href="#top">Back to top</a><p> -->
               </nav>
             </div>
           </div>

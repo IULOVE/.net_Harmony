@@ -1,12 +1,13 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 
 namespace HarmonyLib
 {
 	/// <summary>A PatchClassProcessor used to turn <see cref="HarmonyAttribute"/> on a class/type into patches</summary>
-	/// 
+	///
 	public class PatchClassProcessor
 	{
 		readonly Harmony instance;
@@ -28,9 +29,10 @@ namespace HarmonyLib
 		/// <summary name="Category">Name of the patch class's category</summary>
 		public string Category { get; set; }
 
-		/// <summary>Creates a patch class processor by pointing out a class. Similar to PatchAll() but without searching through all classes.</summary>
+		/// <summary>Creates a patch class processor by pointing out a class; similar to PatchAll() but without searching through all classes</summary>
 		/// <param name="instance">The Harmony instance</param>
-		/// <param name="type">The class to process (need to have at least a [HarmonyPatch] attribute)</param>
+		/// <param name="type">The class to process</param>
+		/// <note>Use this if you want to patch a class that is not annotated with HarmonyPatch</note>
 		///
 		public PatchClassProcessor(Harmony instance, Type type)
 		{
@@ -43,19 +45,17 @@ namespace HarmonyLib
 			containerType = type;
 
 			var harmonyAttributes = HarmonyMethodExtensions.GetFromType(type);
-			if (harmonyAttributes is null || harmonyAttributes.Count == 0)
-				return;
-
 			containerAttributes = HarmonyMethod.Merge(harmonyAttributes);
 			containerAttributes.methodType ??= MethodType.Normal;
-			
+
 			Category = containerAttributes.category;
 
 			auxilaryMethods = [];
 			foreach (var auxType in auxilaryTypes)
 			{
 				var method = PatchTools.GetPatchMethod(containerType, auxType.FullName);
-				if (method is not null) auxilaryMethods[auxType] = method;
+				if (method is not null)
+					auxilaryMethods[auxType] = method;
 			}
 
 			patchMethods = PatchTools.GetPatchMethods(containerType);
@@ -72,9 +72,6 @@ namespace HarmonyLib
 		///
 		public List<MethodInfo> Patch()
 		{
-			if (containerAttributes is null)
-				return null;
-
 			Exception exception = null;
 
 			var mainPrepareResult = RunMethod<HarmonyPrepare, bool>(true, false);
@@ -95,7 +92,7 @@ namespace HarmonyLib
 					lastOriginal = originals[0];
 				ReversePatch(ref lastOriginal);
 
-				replacements = originals.Count > 0 ? BulkPatch(originals, ref lastOriginal) : PatchWithAttributes(ref lastOriginal);
+				replacements = originals.Count > 0 ? BulkPatch(originals, ref lastOriginal, false) : PatchWithAttributes(ref lastOriginal, false);
 			}
 			catch (Exception ex)
 			{
@@ -105,6 +102,18 @@ namespace HarmonyLib
 			RunMethod<HarmonyCleanup>(ref exception, exception);
 			ReportException(exception, lastOriginal);
 			return replacements;
+		}
+
+		/// <summary>REmoves the patches</summary>
+		///
+		public void Unpatch()
+		{
+			var originals = GetBulkMethods();
+			MethodBase lastOriginal = null;
+			if (originals.Count > 0)
+				_ = BulkPatch(originals, ref lastOriginal, true);
+			else
+				_ = PatchWithAttributes(ref lastOriginal, true);
 		}
 
 		void ReversePatch(ref MethodBase lastOriginal)
@@ -124,7 +133,7 @@ namespace HarmonyLib
 			}
 		}
 
-		List<MethodInfo> BulkPatch(List<MethodBase> originals, ref MethodBase lastOriginal)
+		List<MethodInfo> BulkPatch(List<MethodBase> originals, ref MethodBase lastOriginal, bool unpatch)
 		{
 			var jobs = new PatchJobs<MethodInfo>();
 			for (var i = 0; i < originals.Count; i++)
@@ -148,12 +157,15 @@ namespace HarmonyLib
 			foreach (var job in jobs.GetJobs())
 			{
 				lastOriginal = job.original;
-				ProcessPatchJob(job);
+				if (unpatch)
+					ProcessUnpatchJob(job);
+				else
+					ProcessPatchJob(job);
 			}
 			return jobs.GetReplacements();
 		}
 
-		List<MethodInfo> PatchWithAttributes(ref MethodBase lastOriginal)
+		List<MethodInfo> PatchWithAttributes(ref MethodBase lastOriginal, bool unpatch)
 		{
 			var jobs = new PatchJobs<MethodInfo>();
 			foreach (var patchMethod in patchMethods)
@@ -168,7 +180,10 @@ namespace HarmonyLib
 			foreach (var job in jobs.GetJobs())
 			{
 				lastOriginal = job.original;
-				ProcessPatchJob(job);
+				if (unpatch)
+					ProcessUnpatchJob(job);
+				else
+					ProcessPatchJob(job);
 			}
 			return jobs.GetReplacements();
 		}
@@ -187,10 +202,12 @@ namespace HarmonyLib
 					{
 						var patchInfo = HarmonySharedState.GetPatchInfo(job.original) ?? new PatchInfo();
 
-						patchInfo.AddPrefixes(instance.Id, job.prefixes.ToArray());
-						patchInfo.AddPostfixes(instance.Id, job.postfixes.ToArray());
-						patchInfo.AddTranspilers(instance.Id, job.transpilers.ToArray());
-						patchInfo.AddFinalizers(instance.Id, job.finalizers.ToArray());
+						patchInfo.AddPrefixes(instance.Id, [.. job.prefixes]);
+						patchInfo.AddPostfixes(instance.Id, [.. job.postfixes]);
+						patchInfo.AddTranspilers(instance.Id, [.. job.transpilers]);
+						patchInfo.AddFinalizers(instance.Id, [.. job.finalizers]);
+						patchInfo.AddInnerPrefixes(instance.Id, [.. job.innerprefixes]);
+						patchInfo.AddInnerPostfixes(instance.Id, [.. job.innerpostfixes]);
 
 						replacement = PatchFunctions.UpdateWrapper(job.original, patchInfo);
 						HarmonySharedState.UpdatePatchInfo(job.original, replacement, patchInfo);
@@ -206,14 +223,32 @@ namespace HarmonyLib
 			job.replacement = replacement;
 		}
 
+		void ProcessUnpatchJob(PatchJobs<MethodInfo>.Job job)
+		{
+			var patchInfo = HarmonySharedState.GetPatchInfo(job.original) ?? new PatchInfo();
+
+			var hasBody = job.original.HasMethodBody();
+			if (hasBody)
+			{
+				job.postfixes.Do(patch => patchInfo.RemovePatch(patch.method));
+				job.prefixes.Do(patch => patchInfo.RemovePatch(patch.method));
+			}
+			job.transpilers.Do(patch => patchInfo.RemovePatch(patch.method));
+			if (hasBody)
+				job.finalizers.Do(patch => patchInfo.RemovePatch(patch.method));
+
+			var replacement = PatchFunctions.UpdateWrapper(job.original, patchInfo);
+			HarmonySharedState.UpdatePatchInfo(job.original, replacement, patchInfo);
+		}
+
 		List<MethodBase> GetBulkMethods()
 		{
-			var isPatchAll = containerType.GetCustomAttributes(true).Any(a => a.GetType().FullName == typeof(HarmonyPatchAll).FullName);
+			var isPatchAll = containerType.GetCustomAttributes(true).Any(a => a.GetType().FullName == PatchTools.harmonyPatchAllFullName);
 			if (isPatchAll)
 			{
 				var type = containerAttributes.declaringType;
 				if (type is null)
-					throw new ArgumentException($"Using {typeof(HarmonyPatchAll).FullName} requires an additional attribute for specifying the Class/Type");
+					throw new ArgumentException($"Using {PatchTools.harmonyPatchAllFullName} requires an additional attribute for specifying the Class/Type");
 
 				var list = new List<MethodBase>();
 				list.AddRange(AccessTools.GetDeclaredConstructors(type).Cast<MethodBase>());
@@ -230,9 +265,11 @@ namespace HarmonyLib
 			if (targetMethods is object)
 			{
 				string error = null;
-				result = targetMethods.ToList();
-				if (result is null) error = "null";
-				else if (result.Any(m => m is null)) error = "some element was null";
+				result = [.. targetMethods];
+				if (result is null)
+					error = "null";
+				else if (result.Any(m => m is null))
+					error = "some element was null";
 				if (error != null)
 				{
 					if (auxilaryMethods.TryGetValue(typeof(HarmonyTargetMethods), out var method))
@@ -252,7 +289,8 @@ namespace HarmonyLib
 
 		void ReportException(Exception exception, MethodBase original)
 		{
-			if (exception is null) return;
+			if (exception is null)
+				return;
 			if ((containerAttributes.debug ?? false) || Harmony.DEBUG)
 			{
 				_ = Harmony.VersionInfo(out var currentVersion);
@@ -262,7 +300,8 @@ namespace HarmonyLib
 				FileLog.Log($"### Original: {(original?.FullDescription() ?? "NULL")}");
 				FileLog.Log($"### Patch class: {containerType.FullDescription()}");
 				var logException = exception;
-				if (logException is HarmonyException hEx) logException = hEx.InnerException;
+				if (logException is HarmonyException hEx)
+					logException = hEx.InnerException;
 				var exStr = logException.ToString();
 				while (exStr.Contains("\n\n"))
 					exStr = exStr.Replace("\n\n", "\n");
@@ -270,15 +309,17 @@ namespace HarmonyLib
 				FileLog.Log(exStr.Trim());
 			}
 
-			if (exception is HarmonyException) throw exception; // assume HarmonyException already wraps the actual exception
+			if (exception is HarmonyException)
+				throw exception; // assume HarmonyException already wraps the actual exception
 			throw new HarmonyException($"Patching exception in method {original.FullDescription()}", exception);
 		}
 
+		[SuppressMessage("Style", "IDE0300")]
 		T RunMethod<S, T>(T defaultIfNotExisting, T defaultIfFailing, Func<T, string> failOnResult = null, params object[] parameters)
 		{
 			if (auxilaryMethods.TryGetValue(typeof(S), out var method))
 			{
-				var input = (parameters ?? new object[0]).Union(new object[] { instance }).ToArray();
+				var input = (parameters ?? []).Union(new object[] { instance }).ToArray();
 				var actualParameters = AccessTools.ActualParameters(method, input);
 
 				if (method.ReturnType != typeof(void) && typeof(T).IsAssignableFrom(method.ReturnType) is false)
@@ -312,11 +353,12 @@ namespace HarmonyLib
 			return defaultIfNotExisting;
 		}
 
+		[SuppressMessage("Style", "IDE0300")]
 		void RunMethod<S>(ref Exception exception, params object[] parameters)
 		{
 			if (auxilaryMethods.TryGetValue(typeof(S), out var method))
 			{
-				var input = (parameters ?? new object[0]).Union(new object[] { instance }).ToArray();
+				var input = (parameters ?? []).Union(new object[] { instance }).ToArray();
 				var actualParameters = AccessTools.ActualParameters(method, input);
 				try
 				{

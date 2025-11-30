@@ -24,20 +24,11 @@ namespace HarmonyLibTests
 
 	public static class TestTools
 	{
-		// Change this from TestContext.Out to TestContext.Error for immediate output to stderr to help diagnose crashes.
-		// Note: Must be a property rather than a field, since the specific TestContext streams can change between tests.
-		static TextWriter LogWriter => TestContext.Out;
+		// Note: This must be a property rather than a field, since the specific TestContext streams can change between tests.
+		static TextWriter LogWriterOut => TestContext.Out;
+		static TextWriter LogWriterError => TestContext.Error;
 
-		public static void Log(object obj, int indentLevel = 1, int? indentLevelAfterNewLine = null, bool writeLine = true)
-		{
-			var indentBeforeNewLine = new string('\t', indentLevel);
-			var indentAfterNewLine = new string('\t', indentLevelAfterNewLine ?? indentLevel + 1);
-			var text = $"{indentBeforeNewLine}{obj?.ToString().Replace("\n", "\n" + indentAfterNewLine) ?? "null"}";
-			if (writeLine)
-				LogWriter.WriteLine(text);
-			else
-				LogWriter.Write(text);
-		}
+		public static void WriteLine(string text, bool isError) => (isError ? LogWriterError : LogWriterOut).WriteLine(text);
 
 		// Guarantees that assertion failures throw AssertionException, regardless of whether in Assert.Multiple mode.
 		public static void AssertImmediate(TestDelegate testDelegate)
@@ -62,34 +53,6 @@ namespace HarmonyLibTests
 		// Also includes a workaround for Throws constraints reporting failed assertions within the test delegate as an unexpected
 		// AssertionException rather than just reporting the assertion failure message itself.
 
-		public static ConstraintResult AssertThat<TActual>(TActual actual, IResolveConstraint expression, string message = null, params object[] args)
-		{
-			var capture = new CaptureResultConstraint(expression);
-			Assert.That(actual, capture, message, args);
-			return capture.capturedResult;
-		}
-
-		public static ConstraintResult AssertThat<TActual>(TActual actual, IResolveConstraint expression, Func<string> getExceptionMessage)
-		{
-			var capture = new CaptureResultConstraint(expression);
-			Assert.That(actual, capture, getExceptionMessage);
-			return capture.capturedResult;
-		}
-
-		public static ConstraintResult AssertThat<TActual>(ActualValueDelegate<TActual> del, IResolveConstraint expr, string message = null, params object[] args)
-		{
-			var capture = new CaptureResultConstraint(expr);
-			Assert.That(del, capture, message, args);
-			return capture.capturedResult;
-		}
-
-		public static ConstraintResult AssertThat<TActual>(ActualValueDelegate<TActual> del, IResolveConstraint expr, Func<string> getExceptionMessage)
-		{
-			var capture = new CaptureResultConstraint(expr);
-			Assert.That(del, capture, getExceptionMessage);
-			return capture.capturedResult;
-		}
-
 		public static ConstraintResult AssertThat(TestDelegate code, IResolveConstraint constraint, string message = null, params object[] args)
 		{
 			var capture = new CaptureResultConstraint(constraint);
@@ -97,16 +60,9 @@ namespace HarmonyLibTests
 			return capture.capturedResult;
 		}
 
-		public static ConstraintResult AssertThat(TestDelegate code, IResolveConstraint constraint, Func<string> getExceptionMessage)
+		class CaptureResultConstraint(IResolveConstraint parent) : IConstraint
 		{
-			var capture = new CaptureResultConstraint(constraint);
-			Assert.That(code, capture, getExceptionMessage);
-			return capture.capturedResult;
-		}
-
-		class CaptureResultConstraint : IConstraint
-		{
-			readonly IResolveConstraint parent;
+			readonly IResolveConstraint parent = parent;
 			IConstraint resolvedParent;
 			public ConstraintResult capturedResult;
 
@@ -117,11 +73,6 @@ namespace HarmonyLibTests
 			public object[] Arguments => throw new NotImplementedException();
 
 			public ConstraintBuilder Builder { get => throw new NotImplementedException(); set => throw new NotImplementedException(); }
-
-			public CaptureResultConstraint(IResolveConstraint parent)
-			{
-				this.parent = parent;
-			}
 
 			ConstraintResult CaptureResult(ConstraintResult result)
 			{
@@ -137,20 +88,11 @@ namespace HarmonyLibTests
 				return result;
 			}
 
-			public ConstraintResult ApplyTo<TActual>(TActual actual)
-			{
-				return CaptureResult(resolvedParent.ApplyTo(actual));
-			}
+			public ConstraintResult ApplyTo<TActual>(TActual actual) => CaptureResult(resolvedParent.ApplyTo(actual));
 
-			public ConstraintResult ApplyTo<TActual>(ActualValueDelegate<TActual> del)
-			{
-				return CaptureResult(resolvedParent.ApplyTo(del));
-			}
+			public ConstraintResult ApplyTo<TActual>(ActualValueDelegate<TActual> del) => CaptureResult(resolvedParent.ApplyTo(del));
 
-			public ConstraintResult ApplyTo<TActual>(ref TActual actual)
-			{
-				return CaptureResult(resolvedParent.ApplyTo(ref actual));
-			}
+			public ConstraintResult ApplyTo<TActual>(ref TActual actual) => CaptureResult(resolvedParent.ApplyTo(ref actual));
 
 			public IConstraint Resolve()
 			{
@@ -175,15 +117,21 @@ namespace HarmonyLibTests
 			}
 		}
 
-		// Run an action in a test isolation context.
-		public static void RunInIsolationContext(Action<ITestIsolationContext> action)
+		public static string GetAssemblyTempDirectory()
 		{
+			var path = Path.Combine(Path.GetTempPath(), "HarmonyTests_" + Guid.NewGuid().ToString("N"));
+			_ = Directory.CreateDirectory(path);
+			return path;
+		}
+
+		// Run an action in a test isolation context.
+
+		public static void RunInIsolationContext(Action<ITestIsolationContext> action) =>
 #if NETCOREAPP
 			TestAssemblyLoadContext.RunInIsolationContext(action);
 #else
 			TestDomainProxy.RunInIsolationContext(action);
 #endif
-		}
 
 #if NETCOREAPP
 		// .NET Core does not support multiple AppDomains, but it does support unloading assemblies via AssemblyLoadContext.
@@ -216,32 +164,39 @@ namespace HarmonyLibTests
 
 			public TestAssemblyLoadContext() : base(isCollectible: true) { }
 
-			protected override Assembly Load(AssemblyName name)
-			{
+			protected override Assembly Load(AssemblyName name) =>
 				// Defer loading of assembly's dependencies to parent (AssemblyLoadContext.Default) assembly load context.
-				return null;
-			}
+				null;
 
 			public void AssemblyLoad(string name)
 			{
+				// First check if the assembly is in a temp directory used by our tests
+				foreach (var dir in Directory.GetDirectories(Path.GetTempPath(), "HarmonyTests_*"))
+				{
+					var possiblePath = Path.Combine(dir, name + ".dll");
+					if (File.Exists(possiblePath))
+					{
+						_ = LoadFromAssemblyPath(possiblePath);
+						return;
+					}
+				}
+
+				// Fallback to base directory
 				_ = LoadFromAssemblyPath(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, name + ".dll"));
 			}
 
 			// There's no separate AppDomain, so this is just an alias for callback(arg).
-			public void ParentCallback<T>(Action<T> callback, T arg)
-			{
-				callback(arg);
-			}
+			public void ParentCallback<T>(Action<T> callback, T arg) => callback(arg);
 		}
 #else
 		// For .NET Framework and its multiple AppDomain support, need a MarshalByRefObject, so that for an instance created
 		// via appDomain.CreateInstanceAndUnwrap, all calls to that instance's methods are executed in that appDomain.
 
-		class TestDomainProxy : MarshalByRefObject, ITestIsolationContext
+		class TestDomainProxy(AppDomain parentDomain) : MarshalByRefObject, ITestIsolationContext
 		{
-			readonly AppDomain parentDomain;
+			readonly AppDomain parentDomain = parentDomain;
 
-			// Run an action in "isolation" (seperate AppDomain that's unloaded afterwards).
+			// Run an action in "isolation" (separate AppDomain that's unloaded afterwards)
 			// This a static method and thus is run in the AppDomain of the caller (the main AppDomain).
 			public static void RunInIsolationContext(Action<ITestIsolationContext> action)
 			{
@@ -252,7 +207,7 @@ namespace HarmonyLibTests
 				// There's no simpler way to call a non-parameterless constructor than this monstrosity.
 				var proxy = (TestDomainProxy)testDomain.CreateInstanceAndUnwrap(
 					typeof(TestDomainProxy).Assembly.FullName, typeof(TestDomainProxy).FullName, default, default, default,
-					new object[] { AppDomain.CurrentDomain }, default, default
+					[AppDomain.CurrentDomain], default, default
 #if NET35
 					, default // .NET Framework requires obsolete Evidence parameter overload
 #endif
@@ -261,49 +216,41 @@ namespace HarmonyLibTests
 				AppDomain.Unload(testDomain);
 			}
 
-			public TestDomainProxy(AppDomain parentDomain)
-			{
-				this.parentDomain = parentDomain;
-			}
-
 			// Rules for proxy instance methods:
 			// Ensure that all loaded Types of the dummy assemblies are never leaked out of the test domain, so:
 			// 1) never return loaded Types (or instances of those Types); and
 			// 2) always catch exceptions that may contain loaded Types (or instances of those Types) directly.
 			// As long as there is no such leakage, AppDomain.Unload will fully unload the domain and all its assemblies.
 
-			void Run(Action<ITestIsolationContext> action)
-			{
-				action(this);
-			}
+			void Run(Action<ITestIsolationContext> action) => action(this);
 
 			// Note: Console usage won't work within a non-main domain - that has to be delegated to the main domain via a callback.
-			public void ParentCallback<T>(Action<T> action, T arg)
-			{
-				parentDomain.DoCallBack(new ActionTCallback<T>(action, arg).Call);
-			}
+			public void ParentCallback<T>(Action<T> action, T arg) => parentDomain.DoCallBack(new ActionTCallback<T>(action, arg).Call);
 
 			// Delegates used for DoCallback must be serializable.
 			[Serializable]
-			class ActionTCallback<T>
+			class ActionTCallback<T>(Action<T> action, T arg)
 			{
-				readonly Action<T> action;
-				readonly T arg;
+				readonly Action<T> action = action;
+				readonly T arg = arg;
 
-				public ActionTCallback(Action<T> action, T arg)
-				{
-					this.action = action;
-					this.arg = arg;
-				}
-
-				public void Call()
-				{
-					action(arg);
-				}
+				public void Call() => action(arg);
 			}
 
 			public void AssemblyLoad(string assemblyName)
 			{
+				// First check if the assembly is in a temp directory used by our tests
+				foreach (var dir in Directory.GetDirectories(Path.GetTempPath(), "HarmonyTests_*"))
+				{
+					var possiblePath = Path.Combine(dir, assemblyName + ".dll");
+					if (File.Exists(possiblePath))
+					{
+						_ = Assembly.LoadFile(possiblePath);
+						return;
+					}
+				}
+
+				// Fallback to regular load
 				_ = Assembly.Load(assemblyName);
 			}
 		}
@@ -312,20 +259,13 @@ namespace HarmonyLibTests
 
 	public class TestLogger
 	{
-		class ExplicitException : ResultStateException
+		class ExplicitException(string message) : ResultStateException(message)
 		{
-			public ExplicitException(string message) : base(message) { }
-
 			public override ResultState ResultState => ResultState.Explicit;
 		}
 
 		[SetUp]
-		public void BaseSetUp()
-		{
-			TestTools.Log($"### {TestExecutionContext.CurrentContext.CurrentResult.FullName}", indentLevel: 0);
-
-			SkipExplicitTestIfVSTest();
-		}
+		public void BaseSetUp() => SkipExplicitTestIfVSTest();
 
 		// Workaround for [Explicit] attribute sometimes not working in the NUnit3 VS Test Adapter, which applies to both Visual Studio and
 		// vstest.console (bug: https://github.com/nunit/nunit3-vs-adapter/issues/658). It does apparently work with `dotnet test` as long
@@ -341,7 +281,7 @@ namespace HarmonyLibTests
 				// Indirect ways to determine whether the adapter is used in various ways:
 				// 1) process name starts with "testhost" (e.g. testhost.x86)
 				// 2) process name starts with "vstest" (e.g. vstest.console)
-				var process = Process.GetCurrentProcess();
+				using var process = Process.GetCurrentProcess();
 				if (process.ProcessName.StartsWith("testhost") || process.ProcessName.StartsWith("vstest"))
 					throw GetExplicitException(test);
 				// 3) process modules include a *VisualStudio* dll
@@ -357,13 +297,6 @@ namespace HarmonyLibTests
 			var explicitAttribute = test.GetCustomAttributes<ExplicitAttribute>(true).First();
 			explicitAttribute.ApplyToTest(test);
 			return new ExplicitException((string)test.Properties.Get(PropertyNames.SkipReason) ?? "");
-		}
-
-		[TearDown]
-		public void BaseTearDown()
-		{
-			var result = TestExecutionContext.CurrentContext.CurrentResult;
-			TestTools.Log($"--- {result.FullName} => {result.ResultState}", indentLevel: 0);
 		}
 	}
 }

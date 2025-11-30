@@ -1,4 +1,4 @@
-﻿using HarmonyLib;
+using HarmonyLib;
 using HarmonyLibTests.Assets;
 using NUnit.Framework;
 using System;
@@ -64,7 +64,7 @@ namespace HarmonyLibTests.Tools
 
 			var trv4 = new Traverse(new FooBar()).Field("field");
 			AssertIsEmpty(trv4.Method("", new object[0]));
-			AssertIsEmpty(trv4.Method("", new Type[0], new object[0]));
+			AssertIsEmpty(trv4.Method("", [], []));
 		}
 
 		// Traverse should handle basic null values

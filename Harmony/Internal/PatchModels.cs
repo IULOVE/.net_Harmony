@@ -5,9 +5,6 @@ using System.Reflection;
 
 namespace HarmonyLib
 {
-	// PatchJobs holds the information during correlation
-	// of methods and patches while processing attribute patches
-	//
 	internal class PatchJobs<T>
 	{
 		internal class Job
@@ -18,6 +15,8 @@ namespace HarmonyLib
 			internal List<HarmonyMethod> postfixes = [];
 			internal List<HarmonyMethod> transpilers = [];
 			internal List<HarmonyMethod> finalizers = [];
+			internal List<HarmonyMethod> innerprefixes = [];
+			internal List<HarmonyMethod> innerpostfixes = [];
 
 			internal void AddPatch(AttributePatch patch)
 			{
@@ -34,6 +33,12 @@ namespace HarmonyLib
 						break;
 					case HarmonyPatchType.Finalizer:
 						finalizers.Add(patch.info);
+						break;
+					case HarmonyPatchType.InnerPrefix:
+						innerprefixes.Add(patch.info);
+						break;
+					case HarmonyPatchType.InnerPostfix:
+						innerpostfixes.Add(patch.info);
 						break;
 				}
 			}
@@ -54,36 +59,37 @@ namespace HarmonyLib
 
 		internal List<Job> GetJobs()
 		{
-			return state.Values.Where(job =>
+			return [.. state.Values.Where(job =>
 				job.prefixes.Count +
 				job.postfixes.Count +
 				job.transpilers.Count +
-				job.finalizers.Count > 0
-			).ToList();
+				job.finalizers.Count +
+				job.innerprefixes.Count +
+				job.innerpostfixes.Count
+				> 0
+			)];
 		}
 
-		internal List<T> GetReplacements()
-		{
-			return state.Values.Select(job => job.replacement).ToList();
-		}
+		internal List<T> GetReplacements() => [.. state.Values.Select(job => job.replacement)];
 	}
 
 	// AttributePatch contains all information for a patch defined by attributes
 	//
 	internal class AttributePatch
 	{
-		static readonly HarmonyPatchType[] allPatchTypes = new[] {
+		static readonly HarmonyPatchType[] allPatchTypes = [
 			HarmonyPatchType.Prefix,
 			HarmonyPatchType.Postfix,
 			HarmonyPatchType.Transpiler,
 			HarmonyPatchType.Finalizer,
 			HarmonyPatchType.ReversePatch,
-		};
+			HarmonyPatchType.InnerPrefix,
+			HarmonyPatchType.InnerPostfix
+		];
 
 		internal HarmonyMethod info;
 		internal HarmonyPatchType? type;
 
-		static readonly string harmonyAttributeName = typeof(HarmonyAttribute).FullName;
 		internal static AttributePatch Create(MethodInfo patch)
 		{
 			if (patch is null)
@@ -99,13 +105,13 @@ namespace HarmonyLib
 				throw new ArgumentException("Patch method " + patch.FullDescription() + " must be static");
 
 			var list = allAttributes
-				.Where(attr => attr.GetType().BaseType.FullName == harmonyAttributeName)
+				.Where(attr => attr.GetType().BaseType.FullName == PatchTools.harmonyAttributeFullName)
 				.Select(attr =>
 				{
 					var f_info = AccessTools.Field(attr.GetType(), nameof(HarmonyAttribute.info));
 					return f_info.GetValue(attr);
 				})
-				.Select(harmonyInfo => AccessTools.MakeDeepCopy<HarmonyMethod>(harmonyInfo))
+				.Select(AccessTools.MakeDeepCopy<HarmonyMethod>)
 				.ToList();
 			var info = HarmonyMethod.Merge(list);
 			info.method = patch;

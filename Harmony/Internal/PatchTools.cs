@@ -12,6 +12,9 @@ namespace HarmonyLib
 	internal static class PatchTools
 	{
 		private static readonly Dictionary<MethodBase, ICoreDetour> detours = [];
+		internal static readonly string harmonyMethodFullName = typeof(HarmonyMethod).FullName;
+		internal static readonly string harmonyAttributeFullName = typeof(HarmonyAttribute).FullName;
+		internal static readonly string harmonyPatchAllFullName = typeof(HarmonyPatchAll).FullName;
 
 		internal static void DetourMethod(MethodBase method, MethodBase replacement)
 		{
@@ -29,26 +32,52 @@ namespace HarmonyLib
 		static Assembly GetExecutingAssemblyReplacement()
 		{
 			var frames = new StackTrace().GetFrames();
-			if (frames?.Skip(1).FirstOrDefault() is { } frame && Harmony.GetOriginalMethodFromStackframe(frame) is { } original)
+			if (frames?.Skip(1).FirstOrDefault() is { } frame && Harmony.GetMethodFromStackframe(frame) is { } original)
 				return original.Module.Assembly;
 			return Assembly.GetExecutingAssembly();
 		}
-		internal static IEnumerable<CodeInstruction> GetExecutingAssemblyTranspiler(IEnumerable<CodeInstruction> instructions)
-		{
-			return instructions.MethodReplacer(m_GetExecutingAssembly, m_GetExecutingAssemblyReplacement);
-		}
+		internal static IEnumerable<CodeInstruction> GetExecutingAssemblyTranspiler(IEnumerable<CodeInstruction> instructions) => instructions.MethodReplacer(m_GetExecutingAssembly, m_GetExecutingAssemblyReplacement);
 
 		public static MethodInfo CreateMethod(string name, Type returnType, List<KeyValuePair<string, Type>> parameters, Action<ILGenerator> generator)
 		{
 			var parameterTypes = parameters.Select(p => p.Value).ToArray();
+
+			if (AccessTools.IsMonoRuntime && HarmonyLib.Tools.isWindows == false)
+			{
+				var assemblyName = new AssemblyName("TempAssembly");
+
+#if NET2 || NET35
+				var assemblyBuilder = AppDomain.CurrentDomain.DefineDynamicAssembly(assemblyName, AssemblyBuilderAccess.Run);
+#else
+				var assemblyBuilder = AssemblyBuilder.DefineDynamicAssembly(assemblyName, AssemblyBuilderAccess.Run);
+#endif
+
+				var moduleBuilder = assemblyBuilder.DefineDynamicModule("TempModule");
+				var typeBuilder = moduleBuilder.DefineType("TempType", TypeAttributes.Public);
+
+				var methodBuilder = typeBuilder.DefineMethod(name,
+					 MethodAttributes.Public | MethodAttributes.Static,
+					 returnType, parameterTypes);
+
+				for (var i = 0; i < parameters.Count; i++)
+					methodBuilder.DefineParameter(i + 1, ParameterAttributes.None, parameters[i].Key);
+
+				generator(methodBuilder.GetILGenerator());
+
+#if NETSTANDARD2_0
+				var createdType = typeBuilder.CreateTypeInfo().AsType();
+#else
+				var createdType = typeBuilder.CreateType();
+#endif
+				return createdType.GetMethod(name, BindingFlags.Public | BindingFlags.Static);
+			}
+
 			var dynamicMethod = new DynamicMethodDefinition(name, returnType, parameterTypes);
 
 			for (var i = 0; i < parameters.Count; i++)
 				dynamicMethod.Definition.Parameters[i].Name = parameters[i].Key;
 
-			var il = dynamicMethod.GetILGenerator();
-			generator(il);
-
+			generator(dynamicMethod.GetILGenerator());
 			return dynamicMethod.Generate();
 		}
 
@@ -77,10 +106,9 @@ namespace HarmonyLib
 
 		internal static List<AttributePatch> GetPatchMethods(Type type)
 		{
-			return AccessTools.GetDeclaredMethods(type)
-				.Select(method => AttributePatch.Create(method))
-				.Where(attributePatch => attributePatch is not null)
-				.ToList();
+			return [.. AccessTools.GetDeclaredMethods(type)
+				.Select(AttributePatch.Create)
+				.Where(attributePatch => attributePatch is not null)];
 		}
 
 		internal static MethodBase GetOriginalMethod(this HarmonyMethod attr)
@@ -90,19 +118,19 @@ namespace HarmonyLib
 				switch (attr.methodType)
 				{
 					case MethodType.Normal:
-						if (attr.methodName is null)
+						if (string.IsNullOrEmpty(attr.methodName))
 							return null;
 						return AccessTools.DeclaredMethod(attr.declaringType, attr.methodName, attr.argumentTypes);
 
 					case MethodType.Getter:
-						if (attr.methodName is null)
-							return AccessTools.DeclaredIndexer(attr.declaringType, attr.argumentTypes).GetGetMethod(true);
-						return AccessTools.DeclaredProperty(attr.declaringType, attr.methodName).GetGetMethod(true);
+						if (string.IsNullOrEmpty(attr.methodName))
+							return AccessTools.DeclaredIndexerGetter(attr.declaringType, attr.argumentTypes);
+						return AccessTools.DeclaredPropertyGetter(attr.declaringType, attr.methodName);
 
 					case MethodType.Setter:
-						if (attr.methodName is null)
-							return AccessTools.DeclaredIndexer(attr.declaringType, attr.argumentTypes).GetSetMethod(true);
-						return AccessTools.DeclaredProperty(attr.declaringType, attr.methodName).GetSetMethod(true);
+						if (string.IsNullOrEmpty(attr.methodName))
+							return AccessTools.DeclaredIndexerSetter(attr.declaringType, attr.argumentTypes);
+						return AccessTools.DeclaredPropertySetter(attr.declaringType, attr.methodName);
 
 					case MethodType.Constructor:
 						return AccessTools.DeclaredConstructor(attr.declaringType, attr.argumentTypes);
@@ -113,18 +141,61 @@ namespace HarmonyLib
 							.FirstOrDefault();
 
 					case MethodType.Enumerator:
-						if (attr.methodName is null)
+						if (string.IsNullOrEmpty(attr.methodName))
 							return null;
 						var enumMethod = AccessTools.DeclaredMethod(attr.declaringType, attr.methodName, attr.argumentTypes);
 						return AccessTools.EnumeratorMoveNext(enumMethod);
 
 #if NET45_OR_GREATER || NETSTANDARD || NETCOREAPP
 					case MethodType.Async:
-						if (attr.methodName is null)
+						if (string.IsNullOrEmpty(attr.methodName))
 							return null;
 						var asyncMethod = AccessTools.DeclaredMethod(attr.declaringType, attr.methodName, attr.argumentTypes);
 						return AccessTools.AsyncMoveNext(asyncMethod);
 #endif
+
+					case MethodType.Finalizer:
+						return AccessTools.DeclaredFinalizer(attr.declaringType);
+
+					case MethodType.EventAdd:
+						if (string.IsNullOrEmpty(attr.methodName))
+							return null;
+						return AccessTools.DeclaredEventAdder(attr.declaringType, attr.methodName);
+
+					case MethodType.EventRemove:
+						if (string.IsNullOrEmpty(attr.methodName))
+							return null;
+						return AccessTools.DeclaredEventRemover(attr.declaringType, attr.methodName);
+
+					case MethodType.OperatorImplicit:
+					case MethodType.OperatorExplicit:
+					case MethodType.OperatorUnaryPlus:
+					case MethodType.OperatorUnaryNegation:
+					case MethodType.OperatorLogicalNot:
+					case MethodType.OperatorOnesComplement:
+					case MethodType.OperatorIncrement:
+					case MethodType.OperatorDecrement:
+					case MethodType.OperatorTrue:
+					case MethodType.OperatorFalse:
+					case MethodType.OperatorAddition:
+					case MethodType.OperatorSubtraction:
+					case MethodType.OperatorMultiply:
+					case MethodType.OperatorDivision:
+					case MethodType.OperatorModulus:
+					case MethodType.OperatorBitwiseAnd:
+					case MethodType.OperatorBitwiseOr:
+					case MethodType.OperatorExclusiveOr:
+					case MethodType.OperatorLeftShift:
+					case MethodType.OperatorRightShift:
+					case MethodType.OperatorEquality:
+					case MethodType.OperatorInequality:
+					case MethodType.OperatorGreaterThan:
+					case MethodType.OperatorLessThan:
+					case MethodType.OperatorGreaterThanOrEqual:
+					case MethodType.OperatorLessThanOrEqual:
+					case MethodType.OperatorComma:
+						var methodName = "op_" + attr.methodType.ToString().Replace("Operator", "");
+						return AccessTools.DeclaredMethod(attr.declaringType, methodName, attr.argumentTypes);
 				}
 			}
 			catch (AmbiguousMatchException ex)

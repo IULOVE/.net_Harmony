@@ -1,14 +1,72 @@
-﻿using HarmonyLib;
+using HarmonyLib;
 using HarmonyLibTests.Assets;
 using NUnit.Framework;
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Text;
 
 namespace HarmonyLibTests.Patching
 {
 	[TestFixture, NonParallelizable]
-	public class FinalizerPatches : TestLogger
+	public class FinalizerPatches1 : TestLogger
+	{
+		static StringBuilder progress = new();
+
+		[Test]
+		public void Test_FinalizerPatchOrder()
+		{
+			var harmony = new Harmony("test");
+			harmony.PatchCategory("finalizer-test");
+			try
+			{
+				progress = new();
+				Class.Test();
+				Assert.Fail("Should throw an exception");
+			}
+			catch (Exception ex)
+			{
+				var result = progress.Append($"-> {ex?.Message ?? "-"}").ToString();
+				Assert.AreEqual("Finalizer 2 E0 -> E-2\nFinalizer 1 E-2 -> E-1\n-> E-1", result);
+			}
+		}
+
+		[HarmonyPatch(typeof(Class), nameof(Class.Test))]
+		[HarmonyPatchCategory("finalizer-test")]
+		[HarmonyPriority(Priority.Low)]
+		static class Patch1
+		{
+			static Exception Finalizer(Exception __exception)
+			{
+				_ = progress.Append($"Finalizer 1 {__exception?.Message ?? "-"} -> E-1\n");
+				return new Exception("E-1");
+			}
+		}
+
+		[HarmonyPatch(typeof(Class), nameof(Class.Test))]
+		[HarmonyPatchCategory("finalizer-test")]
+		[HarmonyPriority(Priority.High)]
+		static class Patch2
+		{
+			static Exception Finalizer(Exception __exception)
+			{
+				_ = progress.Append($"Finalizer 2 {__exception?.Message ?? "-"} -> E-2\n");
+				return new Exception("E-2");
+			}
+		}
+	}
+
+	static class Class
+	{
+		public static void Test()
+		{
+			TestTools.WriteLine("Test", false);
+			throw new Exception("E0");
+		}
+	}
+
+	[TestFixture, NonParallelizable]
+	public class FinalizerPatches2 : TestLogger
 	{
 		static Dictionary<string, object> info;
 
@@ -235,7 +293,7 @@ namespace HarmonyLibTests.Patching
 				if (m_method.ReturnType == typeof(void))
 					_ = m_method.Invoke(obj, null);
 				else
-					info["result"] = m_method.Invoke(obj, new object[0]);
+					info["result"] = m_method.Invoke(obj, []);
 				info["outerexception"] = null;
 			}
 			catch (TargetInvocationException e)
@@ -277,7 +335,7 @@ namespace HarmonyLibTests.Patching
 		{
 			Assert.NotNull(info, "info should not be null");
 			Assert.NotNull(info["outerexception"], "Should throw an exception");
-			Assert.IsInstanceOf(typeof(E), info["outerexception"]);
+			Assert.IsInstanceOf<E>(info["outerexception"]);
 		}
 
 		private void AssertNullExceptionInput()
@@ -292,7 +350,7 @@ namespace HarmonyLibTests.Patching
 			Assert.NotNull(info, "info should not be null");
 			Assert.True(info.ContainsKey("exception"), "Finalizer should have an exception field");
 			Assert.NotNull(info["exception"], "Finalizer should get an exception input");
-			Assert.IsInstanceOf(typeof(E), info["exception"]);
+			Assert.IsInstanceOf<E>(info["exception"]);
 		}
 	}
 }

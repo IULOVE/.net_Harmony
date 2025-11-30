@@ -8,7 +8,7 @@
     <title>Patching </title>
     <meta name="viewport" content="width=device-width">
     <meta name="title" content="Patching ">
-    <meta name="generator" content="docfx 2.59.4.0">
+    <meta name="generator" content="docfx 2.48.1.0">
     
     <link rel="shortcut icon" href="../favicon.ico">
     <link rel="stylesheet" href="../styles/docfx.vendor.css">
@@ -96,20 +96,16 @@ public class Patch
 {
     [HarmonyReversePatch]
     [HarmonyPatch(typeof(OriginalCode), &quot;Test&quot;)]
-    public static void MyTest(object instance, int counter, string name)
-    {
+    public static void MyTest(object instance, int counter, string name) =&gt;
         // its a stub so it has no initial content
         throw new NotImplementedException(&quot;It's a stub&quot;);
-    }
 }
 
 class Main
 {
-    void Test()
-    {
+    void Test() =&gt;
         // here we call OriginalCode.Test()
         Patch.MyTest(originalInstance, 100, &quot;hello&quot;);
-    }
 }
 </code></pre><h3 id="types-of-reverse-patches">Types of reverse patches</h3>
 <p>The HarmonyReversePatch attribute comes in two alternatives:</p>
@@ -129,7 +125,7 @@ Lets say the original method is long and has some part where a checksum is calcu
 {
     private string SpecialCalculation(string original, int n)
     {
-        var parts = original.Split('-').Reverse().ToArray();
+        var parts = original.Split('-');
         var str = string.Join(&quot;&quot;, parts) + n;
         return str + &quot;Prolog&quot;;
     }
@@ -142,7 +138,7 @@ public class Patch
     // code from the original including the Join() but not the +n
     //
     // Basically
-    // var parts = original.Split('-').Reverse().ToArray();
+    // var parts = original.Split('-');
     // return string.Join(&quot;&quot;, parts)
     //
     [HarmonyReversePatch]
@@ -180,13 +176,12 @@ public class Patch
               <div class="contribution">
                 <ul class="nav">
                   <li>
-                    <a href="https://github.com/pardeike/Harmony/blob/master/Harmony/Documentation/articles/reverse-patching.md/#L1" class="contribution-link">Improve this Doc</a>
+                    <a href="https://github.com/pardeike/Harmony/blob/master/Documentation/articles/reverse-patching.md/#L1" class="contribution-link">Improve this Doc</a>
                   </li>
                 </ul>
               </div>
               <nav class="bs-docs-sidebar hidden-print hidden-xs hidden-sm affix" id="affix">
-                <h5>In This Article</h5>
-                <div></div>
+              <!-- <p><a class="back-to-top" href="#top">Back to top</a><p> -->
               </nav>
             </div>
           </div>
